@@ -8,6 +8,6 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
     int duration = atoi(argv[1]);
-    sleep(duration*10);
+    sleep(duration);
     exit(0);
 }
