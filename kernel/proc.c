@@ -695,3 +695,24 @@ procdump(void)
     printf("\n");
   }
 }
+
+uint64
+procn(void)
+{
+    static char *states[] = {
+        [UNUSED]    "unused",
+        [SLEEPING]  "sleep ",
+        [RUNNABLE]  "runble",
+        [RUNNING]   "run   ",
+        [ZOMBIE]    "zombie"
+    };
+    uint64 n = 0;
+    struct proc *p;
+    for (p = proc; p < &proc[NPROC]; p++) {
+        if (p->state == UNUSED)
+            continue;
+        if (p->state >= 0 && p->state < NELEM(states) && states[p->state])
+            n++;
+    }
+    return n;
+}
