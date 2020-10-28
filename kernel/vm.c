@@ -454,7 +454,7 @@ _vmprint_pte(pagetable_t pagetable, int level)
       for (l = 0; l < level; l++)
           printf(" ..");
       printf("%d: pte %p pa %p\n", i, pte, child);
-      if (level <= 3) _vmprint_pte((pagetable_t)child, level+1);
+      if (level < 3) _vmprint_pte((pagetable_t)child, level+1);
     }
   }
 }
