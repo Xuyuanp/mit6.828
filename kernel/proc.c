@@ -93,6 +93,7 @@ static struct proc*
 allocproc(void)
 {
   struct proc *p;
+  uint64 va;
 
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
@@ -111,6 +112,20 @@ found:
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     release(&p->lock);
     return 0;
+  }
+
+  p->k_pagetable = kvm_new_kernel_pagetable();
+  if (p->k_pagetable == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  va = KSTACK((int) (p - proc));
+  if (mappages(p->k_pagetable, va, PGSIZE, kvmpa(va), PTE_R | PTE_W) != 0) {
+      freeproc(p);
+      release(&p->lock);
+      return 0;
   }
 
   // An empty user page table.
@@ -142,6 +157,9 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  if (p->k_pagetable)
+      kvm_free_kernel_pagetable(p->k_pagetable, p->sz, p->kstack);
+  p->k_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -471,9 +489,15 @@ scheduler(void)
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
+
+        w_satp(MAKE_SATP(p->k_pagetable));
+        sfence_vma();
+
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
+
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
