@@ -19,6 +19,9 @@ extern void forkret(void);
 static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
+void proc_freekpagetable(pagetable_t);
+pagetable_t proc_kpagetable(struct proc *p);
+
 extern char trampoline[]; // trampoline.S
 
 // initialize the proc table at boot time.
@@ -26,20 +29,10 @@ void
 procinit(void)
 {
   struct proc *p;
-  
+
   initlock(&pid_lock, "nextpid");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
-
-      // Allocate a page for the process's kernel stack.
-      // Map it high in memory, followed by an invalid
-      // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
   }
   kvminithart();
 }
@@ -76,7 +69,7 @@ myproc(void) {
 int
 allocpid() {
   int pid;
-  
+
   acquire(&pid_lock);
   pid = nextpid;
   nextpid = nextpid + 1;
@@ -114,20 +107,6 @@ found:
     return 0;
   }
 
-  p->k_pagetable = kvm_new_kernel_pagetable();
-  if (p->k_pagetable == 0) {
-    freeproc(p);
-    release(&p->lock);
-    return 0;
-  }
-
-  va = KSTACK((int) (p - proc));
-  if (mappages(p->k_pagetable, va, PGSIZE, kvmpa(va), PTE_R | PTE_W) != 0) {
-      freeproc(p);
-      release(&p->lock);
-      return 0;
-  }
-
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -135,6 +114,20 @@ found:
     release(&p->lock);
     return 0;
   }
+
+  p->k_pagetable = proc_kpagetable(p);
+  if (p->k_pagetable == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  char *pa = kalloc();
+  if (pa == 0) panic("allocproc: kalloc");
+  va = KSTACK((int)(p - proc));
+  ukvmmap(p->k_pagetable, va, (uint64)pa, PGSIZE, PTE_R|PTE_W);
+  kvmmap(va, (uint64)pa, PGSIZE, PTE_R|PTE_W);
+  p->kstack = va;
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -156,9 +149,14 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if (p->kstack) {
+    uvmunmap(p->k_pagetable, p->kstack, 1, 1);
+    kvmunmap(p->kstack, 1, 0);
+  }
+  p->kstack = 0;
   p->pagetable = 0;
   if (p->k_pagetable)
-      kvm_free_kernel_pagetable(p->k_pagetable, p->sz, p->kstack);
+      ukvmfree(p->k_pagetable);
   p->k_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -203,6 +201,23 @@ proc_pagetable(struct proc *p)
   return pagetable;
 }
 
+pagetable_t
+proc_kpagetable(struct proc *p)
+{
+  pagetable_t pagetable;
+
+  // An empty page table.
+  pagetable = uvmcreate();
+  if(pagetable == 0)
+    return 0;
+
+  ukvminit(pagetable);
+
+  ukvmmap(pagetable, TRAPFRAME, (uint64)p->trapframe, PGSIZE, PTE_R|PTE_W);
+
+  return pagetable;
+}
+
 // Free a process's page table, and free the
 // physical memory it refers to.
 void
@@ -211,6 +226,12 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
+}
+
+void
+proc_freekpagetable(pagetable_t pagetable)
+{
+    ukvmfree(pagetable);
 }
 
 // a user program that calls exec("/init")
@@ -233,11 +254,13 @@ userinit(void)
 
   p = allocproc();
   initproc = p;
-  
+
   // allocate one user page and copy init's instructions
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+
+  ukvmcopy(p->k_pagetable, p->pagetable, 0, p->sz);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -260,13 +283,19 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
+
+  if (sz + n >= PLIC)
+      return -1;
   if(n > 0){
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    /* kvm_copy_pagetable(p->k_pagetable, p->pagetable, p->sz - n, p->sz); */
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    /* kvm_copy_pagetable(p->k_pagetable, p->pagetable, p->sz, p->sz - n); */
   }
+  ukvmcopy(p->k_pagetable, p->pagetable, p->sz, sz);
   p->sz = sz;
   return 0;
 }
@@ -292,6 +321,8 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  ukvmcopy(np->k_pagetable, np->pagetable, 0, np->sz);
 
   np->parent = p;
 
@@ -387,7 +418,7 @@ exit(int status)
   acquire(&p->lock);
   struct proc *original_parent = p->parent;
   release(&p->lock);
-  
+
   // we need the parent's lock in order to wake it up from wait().
   // the parent-then-child rule says we have to lock it first.
   acquire(&original_parent->lock);
@@ -458,7 +489,7 @@ wait(uint64 addr)
       release(&p->lock);
       return -1;
     }
-    
+
     // Wait for a child to exit.
     sleep(p, &p->lock);  //DOC: wait-sleep
   }
@@ -476,12 +507,12 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-  
+
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    
+
     int found = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
@@ -490,18 +521,17 @@ scheduler(void)
         // to release its lock and then reacquire it
         // before jumping back to us.
 
-        w_satp(MAKE_SATP(p->k_pagetable));
-        sfence_vma();
+        ukvminithart(p->k_pagetable);
 
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
 
-        kvminithart();
-
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+
+        kvminithart();
 
         found = 1;
       }
@@ -583,7 +613,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
-  
+
   // Must acquire p->lock in order to
   // change p->state and then call sched.
   // Once we hold p->lock, we can be
@@ -717,7 +747,27 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    printf("%d %s %s", p->pid, state, p->name);
-    printf("\n");
+    printf("%d %s %s\n", p->pid, state, p->name);
+    if (p->parent != 0) {
+        printf("  parent: %d %s\n", p->parent->pid, p->parent->name);
+    }
+    printf("  stack: %p\n", p->kstack);
+    printf("  stack size: %d\n", p->sz);
+    printf("  pagetable: %p\n", p->pagetable);
+    printf("  registers:\n");
+    printf("    ra:  %p\n", p->context.ra);
+    printf("    sp:  %p\n", p->context.sp);
+    printf("    s0:  %p\n", p->context.s0);
+    printf("    s1:  %p\n", p->context.s1);
+    printf("    s2:  %p\n", p->context.s2);
+    printf("    s3:  %p\n", p->context.s3);
+    printf("    s4:  %p\n", p->context.s4);
+    printf("    s5:  %p\n", p->context.s5);
+    printf("    s6:  %p\n", p->context.s6);
+    printf("    s7:  %p\n", p->context.s7);
+    printf("    s8:  %p\n", p->context.s8);
+    printf("    s9:  %p\n", p->context.s9);
+    printf("    s10: %p\n", p->context.s10);
+    printf("    s11: %p\n", p->context.s11);
   }
 }
