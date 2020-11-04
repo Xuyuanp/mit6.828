@@ -126,7 +126,6 @@ found:
   if (pa == 0) panic("allocproc: kalloc");
   va = KSTACK((int)(p - proc));
   ukvmmap(p->k_pagetable, va, (uint64)pa, PGSIZE, PTE_R|PTE_W);
-  kvmmap(va, (uint64)pa, PGSIZE, PTE_R|PTE_W);
   p->kstack = va;
 
   // Set up new context to start executing at forkret,
@@ -149,12 +148,11 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  p->pagetable = 0;
   if (p->kstack) {
     uvmunmap(p->k_pagetable, p->kstack, 1, 1);
-    kvmunmap(p->kstack, 1, 0);
   }
   p->kstack = 0;
-  p->pagetable = 0;
   if (p->k_pagetable)
       ukvmfree(p->k_pagetable);
   p->k_pagetable = 0;
