@@ -110,11 +110,20 @@ sys_sigalarm(void)
 
    if (argint(0, &ticks) < 0)
        return -1;
-   if (argaddr(1, (uint64*)handler) < 0)
+   if (ticks < 0)
+       return -1;
+   if (argaddr(1, (uint64*)&handler) < 0)
        return -1;
 
-   p->alarm_ticks = ticks;
-   p->alarm_handler = handler;
+   if (ticks == 0) {
+       p->alarm_ticks = -1;
+       p->alarm_fired = 0;
+       p->alarm_handler = 0;
+   } else {
+       p->alarm_ticks = ticks;
+       p->alarm_fired = 0;
+       p->alarm_handler = handler;
+   }
 
    return 0;
 }
