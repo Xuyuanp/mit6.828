@@ -108,4 +108,7 @@ struct proc {
   int alarm_ticks;
   int alarm_fired;
   void (*alarm_handler)();
+  uint64 alarm_epc;
+  uint64 alarm_kstack;
+  pagetable_t alarm_pagetable;
 };

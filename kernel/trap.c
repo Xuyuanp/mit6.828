@@ -81,6 +81,11 @@ usertrap(void)
       if (p->alarm_ticks > 0) {
           p->alarm_fired++;
           if (p->alarm_fired >= p->alarm_ticks) {
+
+              p->alarm_epc = p->trapframe->epc+4;
+              p->alarm_kstack = p->kstack;
+              p->alarm_pagetable = p->pagetable;
+
               p->trapframe->epc = (uint64)p->alarm_handler;
               p->alarm_fired = 0;
           }
