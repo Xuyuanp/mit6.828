@@ -106,9 +106,8 @@ struct proc {
 
   // lab4: alarm
   int alarm_ticks;
-  int alarm_fired;
+  int alarm_curr_ticks;
+  int alarm_running;
   void (*alarm_handler)();
-  uint64 alarm_epc;
-  uint64 alarm_kstack;
-  pagetable_t alarm_pagetable;
+  struct trapframe alarm_trapframe;
 };

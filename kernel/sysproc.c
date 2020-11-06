@@ -117,11 +117,11 @@ sys_sigalarm(void)
 
    if (ticks == 0) {
        p->alarm_ticks = -1;
-       p->alarm_fired = 0;
+       p->alarm_curr_ticks = 0;
        p->alarm_handler = 0;
    } else {
        p->alarm_ticks = ticks;
-       p->alarm_fired = 0;
+       p->alarm_curr_ticks = 0;
        p->alarm_handler = handler;
    }
 
@@ -132,9 +132,10 @@ uint64
 sys_sigreturn(void)
 {
   struct proc *p = myproc();
-  p->trapframe->epc = p->alarm_epc;
-  p->kstack = p->alarm_kstack;
-  p->pagetable = p->alarm_pagetable;
-  /* printf("sigreturn epc: %p\n", p->alarm_epc); */
+
+  *p->trapframe = p->alarm_trapframe;
+
+  p->alarm_running = 0;
+
   return 0;
 }

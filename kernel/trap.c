@@ -78,16 +78,15 @@ usertrap(void)
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2) {
-      if (p->alarm_ticks > 0) {
-          p->alarm_fired++;
-          if (p->alarm_fired >= p->alarm_ticks) {
+      if (p->alarm_ticks > 0 && p->alarm_running == 0) {
+          p->alarm_curr_ticks++;
+          if (p->alarm_curr_ticks >= p->alarm_ticks) {
 
-              p->alarm_epc = p->trapframe->epc+4;
-              p->alarm_kstack = p->kstack;
-              p->alarm_pagetable = p->pagetable;
+              p->alarm_trapframe = *p->trapframe;
 
               p->trapframe->epc = (uint64)p->alarm_handler;
-              p->alarm_fired = 0;
+              p->alarm_curr_ticks = 0;
+              p->alarm_running = 1;
           }
       }
       yield();

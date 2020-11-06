@@ -107,7 +107,8 @@ allocproc(void)
 found:
   p->pid = allocpid();
 
-  p->alarm_fired = 0;
+  p->alarm_curr_ticks = 0;
+  p->alarm_running = 0;
   p->alarm_ticks = -1;
   p->alarm_handler = 0;
 
