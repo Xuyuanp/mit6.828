@@ -49,6 +49,13 @@ sys_sbrk(void)
     return -1;
   addr = p->sz;
   p->sz += n;
+
+  if (n < 0) {
+      for (uint64 va = p->sz; va < addr; va += PGSIZE) {
+          uvmunmap(p->pagetable, PGROUNDUP(va), 1, 1);
+      }
+  }
+
   return addr;
 }
 

@@ -352,3 +352,6 @@ sfence_vma()
 
 typedef uint64 pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
+
+
+uint64 lazy_alloc(uint64 va);

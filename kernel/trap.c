@@ -70,13 +70,9 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else if (scause == 0xf || scause == 0xd) {
-    void *pa = kalloc();
-    if (pa == 0) {
-        panic("usertrap(): kalloc");
-    }
-    if (mappages(p->pagetable, PGROUNDDOWN(r_stval()), PGSIZE, (uint64)pa, PTE_W|PTE_R|PTE_U|PTE_V) != 0) {
-        kfree(pa);
-        panic("usertrap(): mappages");
+    uint64 va = r_stval();
+    if (va > p->sz || va < p->trapframe->sp || lazy_alloc(va) == 0) {
+        p->killed = 1;
     }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
