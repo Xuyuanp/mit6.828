@@ -20,6 +20,11 @@ struct run {
 
 struct {
   struct spinlock lock;
+  int counter[MAXPG];
+} krefs;
+
+struct {
+  struct spinlock lock;
   struct run *freelist;
 } kmem;
 
@@ -27,6 +32,9 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&krefs.lock, "krefs");
+  for (int i = 0; i < MAXPG; i++)
+    krefs.counter[i] = 1;
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -37,6 +45,47 @@ freerange(void *pa_start, void *pa_end)
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     kfree(p);
+}
+
+#define PA2IDX(pa) (pa>>PGSHIFT)
+
+int
+kretain(uint64 pa)
+{
+  uint64 pg_idx = PA2IDX(pa);
+  int ret;
+  acquire(&krefs.lock);
+  krefs.counter[pg_idx]++;
+  ret = krefs.counter[pg_idx];
+  release(&krefs.lock);
+  return ret;
+}
+
+int
+krelease(uint64 pa)
+{
+  uint64 pg_idx = PA2IDX(pa);
+  int ret = 0;
+  acquire(&krefs.lock);
+  if (krefs.counter[pg_idx] == 0) {
+    printf("pa: %p\n", pa);
+    panic("krelease");
+  }
+  krefs.counter[pg_idx]--;
+  ret = krefs.counter[pg_idx];
+  release(&krefs.lock);
+  return ret;
+}
+
+int
+kref(uint64 pa)
+{
+  uint64 pg_idx = PA2IDX(pa);
+  int ret = 0;
+  acquire(&krefs.lock);
+  ret = krefs.counter[pg_idx];
+  release(&krefs.lock);
+  return ret;
 }
 
 // Free the page of physical memory pointed at by v,
@@ -50,6 +99,9 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  if (krelease((uint64)pa) > 0)
+    return;
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -76,7 +128,10 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    kretain((uint64)r);
+  }
+
   return (void*)r;
 }
