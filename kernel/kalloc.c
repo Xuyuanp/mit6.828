@@ -34,7 +34,6 @@ struct {
 void
 kinit()
 {
-  printf("freerange: start=%p, end=%p\n", end, PHYSTOP);
   uint64 step = (PHYSTOP - (uint64)end) / NCPU;
   for (int i = 0; i < NCPU; i++) {
     char buf[32];
@@ -56,7 +55,6 @@ freerange(void *pa_start, void *pa_end)
 void
 cpu_freerange(int cpu_id, void *pa_start, void *pa_end)
 {
-  printf("freerange cpu=%d, start=%p, end=%p\n", cpu_id, pa_start, pa_end);
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
