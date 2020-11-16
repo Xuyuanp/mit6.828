@@ -151,7 +151,15 @@ kalloc(void)
     r = kstealfree(next_cpu, want, &got);
     if (r) {
       acquire(&kmems[cpu_id].lock);
-      kmems[cpu_id].freelist = r->next;
+
+      if (kmems[cpu_id].freelist == 0) {
+        kmems[cpu_id].freelist = r->next;
+      } else {
+        struct run *tmp = kmems[cpu_id].freelist;
+        for (; tmp->next != 0; tmp = tmp->next);
+        tmp->next = r->next;
+      }
+
       release(&kmems[cpu_id].lock);
 
       memset((char*)r, 5, PGSIZE); // fill with junk
