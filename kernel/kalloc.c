@@ -10,6 +10,9 @@
 #include "defs.h"
 
 void freerange(void *pa_start, void *pa_end);
+void cpu_freerange(int cpu_id, void *pa_start, void *pa_end);
+void cpu_kfree(int cpu_id, void *pa);
+struct run *kstealfree(int cpu_id, uint64 want, uint64 *got);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
@@ -23,11 +26,22 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct {
+  struct spinlock lock;
+  struct run *freelist;
+} kmems[NCPU];
+
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  printf("freerange: start=%p, end=%p\n", end, PHYSTOP);
+  uint64 step = (PHYSTOP - (uint64)end) / NCPU;
+  for (int i = 0; i < NCPU; i++) {
+    char buf[32];
+    snprintf(buf, 32, "kmem-%d", i);
+    initlock(&kmems[i].lock, buf);
+    cpu_freerange(i, (void*)(end + i * step), (void*)(end + (i + 1) * step));
+  }
 }
 
 void
@@ -39,12 +53,18 @@ freerange(void *pa_start, void *pa_end)
     kfree(p);
 }
 
-// Free the page of physical memory pointed at by v,
-// which normally should have been returned by a
-// call to kalloc().  (The exception is when
-// initializing the allocator; see kinit above.)
 void
-kfree(void *pa)
+cpu_freerange(int cpu_id, void *pa_start, void *pa_end)
+{
+  printf("freerange cpu=%d, start=%p, end=%p\n", cpu_id, pa_start, pa_end);
+  char *p;
+  p = (char*)PGROUNDUP((uint64)pa_start);
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+    cpu_kfree(cpu_id, p);
+}
+
+void
+cpu_kfree(int cpu_id, void *pa)
 {
   struct run *r;
 
@@ -56,10 +76,52 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  acquire(&kmems[cpu_id].lock);
+  r->next = kmems[cpu_id].freelist;
+  kmems[cpu_id].freelist = r;
+  release(&kmems[cpu_id].lock);
+}
+
+// Free the page of physical memory pointed at by v,
+// which normally should have been returned by a
+// call to kalloc().  (The exception is when
+// initializing the allocator; see kinit above.)
+void
+kfree(void *pa)
+{
+  push_off();
+  int cpu_id = cpuid();
+  pop_off();
+
+  cpu_kfree(cpu_id, pa);
+}
+
+struct run *
+kstealfree(int cpu_id, uint64 want, uint64 *got)
+{
+  struct run *r;
+  struct run *tail;
+  *got = 0;
+  acquire(&kmems[cpu_id].lock);
+
+  r = kmems[cpu_id].freelist;
+  tail = r;
+
+  for (int i = 0; i < want && tail != 0; i++) {
+    tail = tail->next;
+    (*got)++;
+  }
+
+  if (tail) {
+    kmems[cpu_id].freelist = tail->next;
+    tail->next = 0;
+  } else {
+    kmems[cpu_id].freelist = 0;
+  }
+
+  release(&kmems[cpu_id].lock);
+
+  return r;
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -68,15 +130,35 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
+  push_off();
+  int cpu_id = cpuid();
+  pop_off();
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
+  acquire(&kmems[cpu_id].lock);
+  r = kmems[cpu_id].freelist;
   if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+    kmems[cpu_id].freelist = r->next;
+  release(&kmems[cpu_id].lock);
 
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
-  return (void*)r;
+    return (void*)r;
+  }
+
+  uint64 got = 0;
+  uint64 want = 32;
+  for (int i = 1; i < NCPU; i++) {
+    int next_cpu = (cpu_id + i) % NCPU;
+    r = kstealfree(next_cpu, want, &got);
+    if (r) {
+      acquire(&kmems[cpu_id].lock);
+      kmems[cpu_id].freelist = r->next;
+      release(&kmems[cpu_id].lock);
+
+      memset((char*)r, 5, PGSIZE); // fill with junk
+      return (void*)r;
+    }
+  }
+  return 0;
 }
