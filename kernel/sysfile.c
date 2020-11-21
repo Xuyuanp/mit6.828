@@ -484,3 +484,73 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  uint64 size;
+  int prot;
+  int flags;
+  int fd;
+  struct file *file;
+  if (argaddr(1, &size) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, &fd, &file) < 0)
+    return -1;
+
+  struct proc *p = myproc();
+
+  struct mmap_vma *vma = 0;
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].used == 0) {
+      vma = &p->vmas[i];
+      break;
+    }
+  }
+  if (vma == 0)
+    return -1;
+
+  filedup(file);
+  vma->size = size;
+  vma->flags = flags;
+  vma->prot = prot;
+  vma->fd = fd;
+  vma->file = file;
+  vma->va = p->sz; // TODO: how to find the unused region in address space?
+  vma->used = 1;
+
+  p->sz += PGROUNDUP(size);
+
+  return vma->va;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  uint64 size;
+  if (argaddr(0, &addr) < 0 || argaddr(1, &size) < 0)
+    return -1;
+
+  if (addr % PGSIZE != 0 || size % PGSIZE != 0)
+    return -1;
+
+  struct proc *p = myproc();
+
+  struct mmap_vma *vma = 0;
+  for (int i = 0; i < NVMA; i++) {
+    vma = &p->vmas[i];
+    if (vma->used == 1 && addr >= vma->va && addr < vma->va + vma->size)
+      break;
+    vma = 0;
+  }
+  if (vma == 0)
+    return -1;
+
+  if (vma->prot & PROT_WRITE && vma->flags & MAP_SHARED) {
+    if (filewrite(vma->file, addr, size) < 0)
+      panic("sys_munmap: filewrite");
+  }
+
+  // TODO: free mem
+
+  return 0;
+}

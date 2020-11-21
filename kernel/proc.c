@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -120,6 +121,10 @@ found:
     return 0;
   }
 
+  for (int i = 0; i < NVMA; i++) {
+    p->vmas[i].used = 0;
+  }
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -157,6 +162,19 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].used == 0)
+      continue;
+    p->vmas[i].used = 0;
+    p->vmas[i].va = 0; // TODO: free va?
+    p->vmas[i].size = 0;
+    p->vmas[i].flags = 0;
+    p->vmas[i].prot = 0;
+    p->vmas[i].fd = 0;
+    p->vmas[i].file = 0;
+    fileclose(p->vmas[i].file);
+  }
 }
 
 // Create a user page table for a given process,
@@ -700,4 +718,52 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+proc_mmap(struct proc *p, uint64 va, uint64 scause)
+{
+  struct mmap_vma *vma = 0;
+  for (int i = 0; i < NVMA; i++) {
+    vma = &p->vmas[i];
+    if (vma->used == 1 && va >= vma->va && va < vma->va + vma->size) {
+      break;
+    }
+    vma = 0;
+  }
+  if (vma == 0)
+    return -1;
+
+  if (scause == 0xd && (vma->prot & PROT_READ) == 0)
+    return -1;
+  if (scause == 0xf && (vma->prot & PROT_WRITE) == 0)
+    return -1;
+
+  uint64 pa = (uint64)kalloc();
+  if (pa == 0)
+    panic("proc_mmap(): kalloc");
+  memset((void*)pa, 0, PGSIZE);
+
+  int perm = PTE_U;
+
+  if (vma->prot & PROT_READ)
+    perm |= PTE_R;
+  if (vma->prot & PROT_WRITE)
+    perm |= PTE_W;
+  if (vma->prot & PROT_EXEC)
+    perm |= PTE_U;
+
+  if (mappages(p->pagetable, va, PGSIZE, pa, perm) != 0) {
+    kfree((void*)pa);
+    return -1;
+  }
+  uint64 size = PGSIZE;
+  if (va + PGSIZE > vma->va + vma->size)
+    size = vma->va + vma->size - va;
+  if (fileread(vma->file, va, size) < 0) {
+    uvmunmap(p->pagetable, va, 1, 1);
+    return -1;
+  }
+
+  return 0;
 }
