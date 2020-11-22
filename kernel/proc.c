@@ -148,6 +148,14 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].used == 0)
+      continue;
+    fileclose(p->vmas[i].file);
+    uvmunmap(p->pagetable, p->vmas[i].va, p->vmas[i].size / PGSIZE, 1);
+    memset(&p->vmas[i], 0, sizeof(p->vmas[i]));
+  }
+
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
@@ -162,19 +170,6 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
-
-  for (int i = 0; i < NVMA; i++) {
-    if (p->vmas[i].used == 0)
-      continue;
-    p->vmas[i].used = 0;
-    p->vmas[i].va = 0; // TODO: free va?
-    p->vmas[i].size = 0;
-    p->vmas[i].flags = 0;
-    p->vmas[i].prot = 0;
-    p->vmas[i].fd = 0;
-    p->vmas[i].file = 0;
-    fileclose(p->vmas[i].file);
-  }
 }
 
 // Create a user page table for a given process,
@@ -739,6 +734,8 @@ proc_mmap(struct proc *p, uint64 va, uint64 scause)
   if (scause == 0xf && (vma->prot & PROT_WRITE) == 0)
     return -1;
 
+  vma->wroten = vma->wroten || scause == 0xf;
+
   uint64 pa = (uint64)kalloc();
   if (pa == 0)
     panic("proc_mmap(): kalloc");
@@ -760,6 +757,7 @@ proc_mmap(struct proc *p, uint64 va, uint64 scause)
   uint64 size = PGSIZE;
   if (va + PGSIZE > vma->va + vma->size)
     size = vma->va + vma->size - va;
+  
   if (fileread(vma->file, va, size) < 0) {
     uvmunmap(p->pagetable, va, 1, 1);
     return -1;

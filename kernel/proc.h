@@ -32,11 +32,13 @@ extern struct cpu cpus[NCPU];
 
 struct mmap_vma {
   int used;
+  int wroten;
   uint64 va;
   uint64 size;
   int prot;
   int flags;
   int fd;
+  uint64 offset;
   struct file *file;
 };
 

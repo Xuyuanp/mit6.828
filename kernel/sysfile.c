@@ -509,6 +509,7 @@ sys_mmap(void)
     return -1;
 
   filedup(file);
+  vma->wroten = 0;
   vma->size = size;
   vma->flags = flags;
   vma->prot = prot;
@@ -544,13 +545,24 @@ sys_munmap(void)
   }
   if (vma == 0)
     return -1;
+  if (addr + size > vma->va + vma->size)
+    return -1;
 
-  if (vma->prot & PROT_WRITE && vma->flags & MAP_SHARED) {
+  if (vma->prot & PROT_WRITE && vma->wroten && vma->flags & MAP_SHARED) {
     if (filewrite(vma->file, addr, size) < 0)
       panic("sys_munmap: filewrite");
   }
 
-  // TODO: free mem
+  uvmunmap(p->pagetable, addr, size / PGSIZE, 1);
+
+  if (addr == vma->va) {
+    vma->va = addr + size;
+  }
+  vma->size -= size;
+  if (vma->size == 0) {
+    fileclose(vma->file);
+    memset(vma, 0, sizeof(*vma));
+  }
 
   return 0;
 }
