@@ -495,7 +495,8 @@ sys_mmap(void)
   int flags;
   int fd;
   struct file *file;
-  if (argaddr(1, &size) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, &fd, &file) < 0)
+  int offset;
+  if (argaddr(1, &size) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, &fd, &file) < 0 || argint(5, &offset) < 0)
     return MMAP_FAILED;
 
   if (file->readable == 0)
@@ -522,8 +523,8 @@ sys_mmap(void)
   vma->prot = prot;
   vma->fd = fd;
   vma->file = file;
-  vma->offset = 0;
-  vma->va = p->sz; // TODO: how to find the unused region in address space?
+  vma->offset = offset;
+  vma->va = p->sz;
   vma->used = 1;
 
   p->sz += PGROUNDUP(size);
@@ -561,7 +562,7 @@ sys_munmap(void)
     struct inode *ip = vma->file->ip;
     begin_op();
     ilock(ip);
-    writei(ip, 1, addr, addr - vma->va, size);
+    writei(ip, 1, addr, vma->offset + addr - vma->va, size);
     iunlock(ip);
     end_op();
   }
@@ -570,6 +571,7 @@ sys_munmap(void)
 
   if (addr == vma->va) {
     vma->va = addr + size;
+    vma->offset += size;
   }
   vma->size -= size;
   if (vma->size == 0) {

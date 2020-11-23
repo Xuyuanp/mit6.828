@@ -6,6 +6,9 @@
 #include "proc.h"
 #include "defs.h"
 #include "fcntl.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 
 struct cpu cpus[NCPU];
 
@@ -148,14 +151,6 @@ found:
 static void
 freeproc(struct proc *p)
 {
-  for (int i = 0; i < NVMA; i++) {
-    if (p->vmas[i].used == 0)
-      continue;
-    fileclose(p->vmas[i].file);
-    uvmunmap(p->pagetable, p->vmas[i].va, p->vmas[i].size / PGSIZE, 1);
-    memset(&p->vmas[i], 0, sizeof(p->vmas[i]));
-  }
-
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
@@ -285,6 +280,15 @@ fork(void)
   // Allocate process.
   if((np = allocproc()) == 0){
     return -1;
+  }
+
+  // copy vma
+  for (int i = 0; i < NVMA; i++) {
+    np->vmas[i] = p->vmas[i];
+
+    if (np->vmas[i].used == 1) {
+      filedup(np->vmas[i].file);
+    }
   }
 
   // Copy user memory from parent to child.
@@ -755,14 +759,15 @@ proc_mmap(struct proc *p, uint64 va, uint64 scause)
     size = vma->va + vma->size - va;
 
   int r = 0;
+
   begin_op();
-  if ((r = fileread1(vma->file, va, vma->offset, size)) < 0) {
+  r = fileread1(vma->file, va, vma->offset + va - vma->va, size);
+  end_op();
+
+  if (r < 0) {
     uvmunmap(p->pagetable, va, 1, 1);
-    end_op();
     return -1;
   }
-  end_op();
-  vma->offset += r;
 
   return 0;
 }
