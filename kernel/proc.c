@@ -734,8 +734,6 @@ proc_mmap(struct proc *p, uint64 va, uint64 scause)
   if (scause == 0xf && (vma->prot & PROT_WRITE) == 0)
     return -1;
 
-  vma->wroten = vma->wroten || scause == 0xf;
-
   uint64 pa = (uint64)kalloc();
   if (pa == 0)
     panic("proc_mmap(): kalloc");
@@ -747,8 +745,6 @@ proc_mmap(struct proc *p, uint64 va, uint64 scause)
     perm |= PTE_R;
   if (vma->prot & PROT_WRITE)
     perm |= PTE_W;
-  if (vma->prot & PROT_EXEC)
-    perm |= PTE_U;
 
   if (mappages(p->pagetable, va, PGSIZE, pa, perm) != 0) {
     kfree((void*)pa);
@@ -757,11 +753,16 @@ proc_mmap(struct proc *p, uint64 va, uint64 scause)
   uint64 size = PGSIZE;
   if (va + PGSIZE > vma->va + vma->size)
     size = vma->va + vma->size - va;
-  
-  if (fileread(vma->file, va, size) < 0) {
+
+  int r = 0;
+  begin_op();
+  if ((r = fileread1(vma->file, va, vma->offset, size)) < 0) {
     uvmunmap(p->pagetable, va, 1, 1);
+    end_op();
     return -1;
   }
+  end_op();
+  vma->offset += r;
 
   return 0;
 }

@@ -129,6 +129,24 @@ fileread(struct file *f, uint64 addr, int n)
   return r;
 }
 
+int
+fileread1(struct file *f, uint64 addr, uint offset, int n)
+{
+  int r = 0;
+
+  if(f->readable == 0)
+    return -1;
+
+  if (f->type != FD_INODE)
+    return -1;
+
+  ilock(f->ip);
+  r = readi(f->ip, 1, addr, offset, n);
+  iunlock(f->ip);
+
+  return r;
+}
+
 // Write to file f.
 // addr is a user virtual address.
 int

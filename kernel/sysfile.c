@@ -485,6 +485,8 @@ sys_pipe(void)
   return 0;
 }
 
+#define MMAP_FAILED 0xffffffffffffffff
+
 uint64
 sys_mmap(void)
 {
@@ -494,7 +496,13 @@ sys_mmap(void)
   int fd;
   struct file *file;
   if (argaddr(1, &size) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, &fd, &file) < 0)
-    return -1;
+    return MMAP_FAILED;
+
+  if (file->readable == 0)
+    return MMAP_FAILED;
+
+  if ((prot & PROT_WRITE) && file->writable == 0 && (flags & MAP_SHARED))
+    return MMAP_FAILED;
 
   struct proc *p = myproc();
 
@@ -506,15 +514,15 @@ sys_mmap(void)
     }
   }
   if (vma == 0)
-    return -1;
+    return MMAP_FAILED;
 
   filedup(file);
-  vma->wroten = 0;
   vma->size = size;
   vma->flags = flags;
   vma->prot = prot;
   vma->fd = fd;
   vma->file = file;
+  vma->offset = 0;
   vma->va = p->sz; // TODO: how to find the unused region in address space?
   vma->used = 1;
 
@@ -548,9 +556,14 @@ sys_munmap(void)
   if (addr + size > vma->va + vma->size)
     return -1;
 
-  if (vma->prot & PROT_WRITE && vma->wroten && vma->flags & MAP_SHARED) {
-    if (filewrite(vma->file, addr, size) < 0)
-      panic("sys_munmap: filewrite");
+  if ((vma->prot & PROT_WRITE) && (vma->flags & MAP_SHARED)) {
+    // write back to file
+    struct inode *ip = vma->file->ip;
+    begin_op();
+    ilock(ip);
+    writei(ip, 1, addr, addr - vma->va, size);
+    iunlock(ip);
+    end_op();
   }
 
   uvmunmap(p->pagetable, addr, size / PGSIZE, 1);
@@ -561,6 +574,7 @@ sys_munmap(void)
   vma->size -= size;
   if (vma->size == 0) {
     fileclose(vma->file);
+    // free vma
     memset(vma, 0, sizeof(*vma));
   }
 
