@@ -3,7 +3,7 @@
 #include "user/user.h"
 
 int main(int argc, char *argv[]) {
-    int buf[10];
+    char c;
     int pid;
 
     int fds[2];
@@ -11,16 +11,16 @@ int main(int argc, char *argv[]) {
 
     pid = fork();
     if (pid == 0) {
-        read(fds[0], buf, sizeof(buf));
+        read(fds[0], &c, sizeof(char));
         printf("%d: received ping\n", getpid());
-        write(fds[0], "\n", 1);
+        write(fds[1], "c", 1);
         exit(0);
     } else {
-        write(fds[1], "\n", 1);
+        write(fds[1], "p", 1);
 
         wait((int *)0);
 
-        read(fds[1], buf, sizeof(buf));
+        read(fds[0], &c, sizeof(char));
 
         printf("%d: received pong\n", getpid());
     }
